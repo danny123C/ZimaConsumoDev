@@ -2,17 +2,19 @@ package com.daquimovile.api.service.ConsultaCoreMetodos;
 
 
 import com.daquimovile.api.dto.RequestDto;
-import com.daquimovile.api.service.ConsultaCoreProxyService;
+import com.daquimovile.api.exception.BusinessException;
+import com.daquimovile.api.service.ExternalServices.ConsultaCoreProxyService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-
 @Service
 @RequiredArgsConstructor
 public class ConsultaCoreServiceImpl implements IConsultaCoreService {
@@ -20,7 +22,11 @@ public class ConsultaCoreServiceImpl implements IConsultaCoreService {
     private final ConsultaCoreProxyService proxyService;
     private final ObjectMapper objectMapper;
 
-    // --- CONSTANTES MUDADAS DEL CONTROLADOR ---
+    // El servicio ahora es dueño de su URL
+    @Value("${zima.external.consultar-url}")
+    private String consultarUrl;
+
+    // Constantes de configuración
     private static final String DEFAULT_U = "101";
     private static final int DEFAULT_M = 5;
     private static final int DEFAULT_T = 1000;
@@ -32,43 +38,45 @@ public class ConsultaCoreServiceImpl implements IConsultaCoreService {
     private static final int DEFAULT_PAGINA = 0;
     private static final int DEFAULT_CANTIDAD = 6;
 
-  @Override
-public JsonNode obtenerResumenSimplificado(Long cpersona) {
-    // 1. Obtener lista de productos
-    RequestDto requestDto = buildRequest(cpersona);
-    var resp = proxyService.consultar(objectMapper.valueToTree(requestDto));
-    
-    // 2. Filtrar el PK activo
-    JsonNode soloProductosDos = filtrarPorProductoYEstatus(resp.getBody(), 2, "ACT");
-    String pkExtraido = extraerPkPrincipal(soloProductosDos);
+    @Override
+    public JsonNode obtenerResumenSimplificado(Long cpersona) {
+        // 1. Obtener lista de productos
+        RequestDto requestDto = buildRequest(cpersona);
+        
+        // Llamada dinámica pasando la URL de consulta
+        var resp = proxyService.procesarPeticion(consultarUrl, objectMapper.valueToTree(requestDto));
+        
+        // 2. Filtrar el PK activo
+        JsonNode soloProductosDos = filtrarPorProductoYEstatus(resp.getBody(), 2, "ACT");
+        String pkExtraido = extraerPkPrincipal(soloProductosDos);
 
-    // --- CAMBIO AQUÍ: En lugar de return null, lanzamos excepción ---
-    if (pkExtraido.isEmpty()) {
-        throw new RuntimeException("No se encontró una cuenta activa (Producto 2) para el cliente: " + cpersona);
+        if (pkExtraido.isEmpty()) {
+            throw new BusinessException("No se encontró una cuenta de ahorros activa para el socio: " + cpersona);
+        }
+
+        // 3. Consultar Detalle
+        ObjectNode requestDetalleBody = armarRequestDetalle(pkExtraido);
+        
+        // Segunda llamada dinámica
+        var respDetalle = proxyService.procesarPeticion(consultarUrl, requestDetalleBody);
+
+        if (respDetalle.getStatusCode().is2xxSuccessful() && respDetalle.getBody() != null) {
+            JsonNode detalleBody = respDetalle.getBody();
+            
+            ObjectNode respuestaSimplificada = objectMapper.createObjectNode();
+            respuestaSimplificada.put("coperacion", extraerPkDesdeDetalle(detalleBody));
+            respuestaSimplificada.put("nombre", extraerNombreDesdeDetalle(detalleBody));
+            respuestaSimplificada.put("saldo", extraerSaldoEfectivo(detalleBody));
+            
+            return respuestaSimplificada;
+        }
+
+        throw new BusinessException("Error al obtener el detalle de la cuenta: " + pkExtraido);
     }
 
-    // 3. Consultar Detalle
-    ObjectNode requestDetalleBody = armarRequestDetalle(pkExtraido);
-    var respDetalle = proxyService.consultar(requestDetalleBody);
+    // --- MÉTODOS AUXILIARES ---
 
-    if (respDetalle.getStatusCode().is2xxSuccessful() && respDetalle.getBody() != null) {
-        JsonNode detalleBody = respDetalle.getBody();
-        
-        ObjectNode respuestaSimplificada = objectMapper.createObjectNode();
-        respuestaSimplificada.put("coperacion", extraerPkDesdeDetalle(detalleBody));
-        respuestaSimplificada.put("nombre", extraerNombreDesdeDetalle(detalleBody));
-        respuestaSimplificada.put("saldo", extraerSaldoEfectivo(detalleBody));
-        
-        return respuestaSimplificada;
-    }
-
-    // --- CAMBIO AQUÍ: Si el detalle falla ---
-    throw new RuntimeException("Error al obtener el detalle de la operación: " + pkExtraido);
-}
-
-    // --- TODOS TUS MÉTODOS PRIVADOS (Pégalos aquí tal cual los tenías) ---
-
-    private RequestDto buildRequest(Long cpersona) { //MEtodo para construir el RequestDto con los valores por defecto y el cpersona dinámico   
+    private RequestDto buildRequest(Long cpersona) {
         RequestDto requestDto = new RequestDto();
         requestDto.setU(DEFAULT_U);
         requestDto.setM(DEFAULT_M);

@@ -4,8 +4,8 @@ import com.daquimovile.api.dto.ConsultaCoreInputDto;
 
 import com.daquimovile.api.dto.ResponseDto;
 import com.daquimovile.api.mapper.ConsultaCoreMapper;
-import com.daquimovile.api.service.ConsultaCoreProxyService;
 import com.daquimovile.api.service.ConsultaCoreMetodos.IConsultaCoreService;
+import com.daquimovile.api.service.ExternalServices.ConsultaCoreProxyService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -32,9 +32,7 @@ public class ConsultaCoreController {
         private final IConsultaCoreService coreService;
 
         public ConsultaCoreController(
-                ConsultaCoreProxyService consultaCoreProxyService, 
                 ConsultaCoreMapper mapper, 
-                ObjectMapper objectMapper, 
                 IConsultaCoreService coreService) {
                 
                 this.mapper = mapper;
@@ -54,21 +52,20 @@ public class ConsultaCoreController {
             )
     )
    @PostMapping(value = "/consultar", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<ResponseDto> consultar(
-        @io.swagger.v3.oas.annotations.parameters.RequestBody(
-            required = true,
-            description = "ID de la persona a consultar",
-            content = @Content(schema = @Schema(implementation = ConsultaCoreInputDto.class))
-        ) 
-        @RequestBody ConsultaCoreInputDto inputDto) {
+    public ResponseEntity<ResponseDto<JsonNode>> consultar(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                required = true,
+                description = "ID de la persona a consultar",
+                content = @Content(schema = @Schema(implementation = ConsultaCoreInputDto.class))
+            ) 
+            @RequestBody ConsultaCoreInputDto inputDto) {
         
+        // 1. Llamamos al servicio. Si no hay cuenta activa, el servicio lanzará 
+        // una BusinessException y el GlobalExceptionHandler responderá por nosotros.
         JsonNode resultado = coreService.obtenerResumenSimplificado(inputDto.getCpersona());
 
-        if (resultado == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(new ResponseDto(404, "No se encontró cuenta activa o el servicio externo falló", null));
-        }
-
+        // 2. Retornamos la respuesta usando el mapper genérico.
+        // Al pasarle 'resultado' (JsonNode), el mapper construye el ResponseDto<JsonNode>.
         return ResponseEntity.ok(mapper.fromJsonNode(200, "Consulta exitosa", resultado));
     }
 }
